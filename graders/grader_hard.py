@@ -64,7 +64,9 @@ def grade_hard(action_content: str) -> dict[str, float | str]:
     if next_step_hit:
         score += WEIGHTS["next_step"]
 
-    score = max(0.0, min(1.0, round(score, 2)))
+    # Clamp to strict (0, 1) range — validator rejects exact 0.0 or 1.0
+    score = round(score, 2)
+    score = max(0.01, min(0.99, score))
 
     parts = []
     parts.append("acknowledgement: yes" if acknowledgement_hit else "acknowledgement: no")

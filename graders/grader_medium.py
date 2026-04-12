@@ -14,6 +14,6 @@ def grade_medium(action_content: str, expected_label: str) -> dict[str, float | 
     expected = _normalize_label(expected_label)
 
     if predicted == expected:
-        return {"score": 1.0, "reason": "correct label"}
+        return {"score": 0.99, "reason": "correct label"}
 
-    return {"score": 0.0, "reason": f"expected '{expected}', got '{predicted or 'empty'}'"}
+    return {"score": 0.01, "reason": f"expected '{expected}', got '{predicted or 'empty'}'"}
