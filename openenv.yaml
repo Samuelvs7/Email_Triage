@@ -10,3 +10,17 @@ task_types:
   - spam_classification
   - priority_classification
   - reply_drafting
+
+tasks:
+  - id: easy_spam_classification
+    name: Spam Classification
+    description: Classify an email as spam or not_spam.
+    grader: graders.grader_easy:grade_easy
+  - id: medium_priority_classification
+    name: Priority Classification
+    description: Classify email priority as low, normal, or urgent.
+    grader: graders.grader_medium:grade_medium
+  - id: hard_support_reply
+    name: Support Reply Drafting
+    description: Draft a customer support reply.
+    grader: graders.grader_hard:grade_hard
