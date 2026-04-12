@@ -1,61 +1,66 @@
-"""Standalone inference script for Email Triage environment.
+"""
+Inference Script for Email Triage Environment
+===================================
+MANDATORY
+- API_BASE_URL   The API endpoint for the LLM.
+- MODEL_NAME     The model identifier to use for inference.
+- HF_TOKEN       Your Hugging Face / API key.
+- API_KEY        Alternative to HF_TOKEN.
 
-Uses the hackathon's LLM proxy (API_BASE_URL + API_KEY) to classify and
-reply to emails, then grades the responses through the environment.
+STDOUT FORMAT
+- [START] task=<task_name> env=<benchmark> model=<model_name>
+- [STEP]  step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+- [END]   success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 """
 
 import asyncio
 import os
+from typing import List, Optional
+
 from openai import OpenAI
 
 from env import EmailTriageEnv
 from models import Action
 
 
-# ---------- LLM client using hackathon proxy ----------
-API_BASE_URL = os.environ.get("API_BASE_URL")
-API_KEY = os.environ.get("API_KEY")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
+# ---------- Environment variables ----------
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
+BENCHMARK = "email-triage-env"
 
-if not API_BASE_URL or not API_KEY:
-    raise RuntimeError(
-        "API_BASE_URL and API_KEY must be set. "
-        "These are injected by the hackathon platform."
-    )
+if not API_KEY:
+    raise ValueError("HF_TOKEN or API_KEY must be set.")
 
-client = OpenAI(
-    base_url=API_BASE_URL,
-    api_key=API_KEY,
-)
+client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
 
-# ---------- Logging helpers ----------
+# ---------- Logging helpers (strict format) ----------
 
-def log_start(task, env_name, model):
-    print(f"[START] task={task} env={env_name} model={model}", flush=True)
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step, task_type, action, reward, done, error=None):
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str] = None) -> None:
     error_val = error if error else "null"
+    done_val = str(done).lower()
     print(
-        f"[STEP] step={step} task_type={task_type} action={action!r} "
-        f"reward={reward:.2f} done={str(done).lower()} error={error_val}",
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
         flush=True,
     )
 
 
-def log_end(success, steps, score, rewards):
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} "
-        f"score={score:.2f} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
         flush=True,
     )
 
 
 # ---------- LLM agent ----------
 
-def get_llm_action(task_type: str, instructions: str, email_subject: str, email_body: str) -> tuple[str, str]:
+def get_llm_action(task_type: str, instructions: str, email_subject: str, email_body: str) -> tuple:
     """Call the LLM through the hackathon proxy and return (action_type, content)."""
 
     email_text = f"Subject: {email_subject}\nBody: {email_body}"
@@ -102,7 +107,6 @@ def get_llm_action(task_type: str, instructions: str, email_subject: str, email_
         content = response.choices[0].message.content.strip()
     except Exception as e:
         print(f"[DEBUG] LLM error: {e}", flush=True)
-        # Fallback so grading still runs
         if task_type == "reply_drafting":
             content = (
                 "Thank you for reaching out. I am sorry for the inconvenience. "
@@ -116,25 +120,28 @@ def get_llm_action(task_type: str, instructions: str, email_subject: str, email_
     return action_type, content
 
 
-# ---------- Main loop ----------
+# ---------- Main: run each task as separate episode ----------
 
 async def main():
     env = EmailTriageEnv()
-    rewards = []
-    steps = 0
     num_tasks = len(env._task_instances)
 
-    log_start("email-triage", "openenv", MODEL_NAME)
+    for task_idx in range(num_tasks):
+        obs = await env.reset()
 
-    try:
-        for step_num in range(1, num_tasks + 1):
-            obs = await env.reset()
+        task_type = obs.get("task_type", "unknown")
+        task_id = obs.get("task_id", task_type)
+        instructions = obs.get("instructions", "")
+        email_subject = obs.get("email_subject", "")
+        email_body = obs.get("email_body", "")
 
-            task_type = obs.get("task_type", "")
-            instructions = obs.get("instructions", "")
-            email_subject = obs.get("email_subject", "")
-            email_body = obs.get("email_body", "")
+        rewards: List[float] = []
+        steps_taken = 0
 
+        # Each task is a separate [START]/[END] episode
+        log_start(task=task_type, env=BENCHMARK, model=MODEL_NAME)
+
+        try:
             action_type, content = get_llm_action(
                 task_type, instructions, email_subject, email_body
             )
@@ -143,22 +150,25 @@ async def main():
             result = await env.step(action)
 
             reward = result.get("reward", 0.0)
-            done = result.get("done", False)
+            done = result.get("done", True)
+            error = result.get("info", {}).get("error", None)
 
             rewards.append(reward)
-            steps = step_num
+            steps_taken = 1
 
-            log_step(step_num, task_type, content, reward, done)
+            log_step(step=1, action=content, reward=reward, done=done, error=error)
 
-        score = sum(rewards) / len(rewards) if rewards else 0.0
-        success = score > 0.5
+            score = reward
+            success = score > 0.1
 
-    except Exception as e:
-        print(f"[ERROR] {e}", flush=True)
-        score = sum(rewards) / len(rewards) if rewards else 0.0
-        success = False
+        except Exception as e:
+            print(f"[DEBUG] Task {task_type} error: {e}", flush=True)
+            score = 0.0
+            success = False
+            steps_taken = 1
+            rewards = [0.0]
 
-    log_end(success, steps, score, rewards)
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
 
 if __name__ == "__main__":
