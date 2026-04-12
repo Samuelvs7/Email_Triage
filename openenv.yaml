@@ -1,0 +1,12 @@
+spec_version: 1
+name: email-triage-env
+description: Deterministic Email Triage environment for spam, priority, and reply tasks.
+type: space
+runtime: fastapi
+app: server:app
+port: 7860
+entrypoint: server.py
+task_types:
+  - spam_classification
+  - priority_classification
+  - reply_drafting
